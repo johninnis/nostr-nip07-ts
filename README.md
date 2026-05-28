@@ -44,7 +44,7 @@ The package exports three symbols.
 
 ### `createNip07Signer(input: CreateNip07SignerInput): Signer`
 
-Construct a frozen `Signer` backed by a NIP-07 extension. `getPublicKey` is memoised after the first successful resolve — subsequent calls do not re-query the extension.
+Construct a `Signer` backed by a NIP-07 extension. `getPublicKey` is memoised after the first successful resolve — subsequent calls do not re-query the extension.
 
 ### `CreateNip07SignerInput`
 
@@ -97,7 +97,7 @@ User rejection is the exception: it is thrown as `SignerRejectedError` rather th
 
 ## Errors
 
-All error classes are re-exports from `@innis/nostr-core` — the same ones every other `@innis/*` signer throws.
+All error classes are defined in `@innis/nostr-core` — the same ones every other `@innis/*` signer throws. Import them from `@innis/nostr-core` to `instanceof`-check or pattern-match on `.tag`.
 
 - **`SigningError`** — `getPublicKey` / `signEvent` invoked while `getExtension()` returns `null`, or `signEvent` received a malformed response from the extension.
 - **`SignerRejectedError`** — user clicked "deny" in the extension popup. Detected via `isUserRejection` from `@innis/nostr-core` (heuristic match on the extension's error message).

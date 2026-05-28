@@ -57,13 +57,17 @@ export interface CreateNip07SignerInput {
 
 const NIP_LABEL = { nip04: "NIP-04", nip44: "NIP-44" } as const
 
+const throwIfUserRejected = (err: unknown): void => {
+  if (isUserRejection(err)) throw new SignerRejectedError(errorMessage(err), err)
+}
+
 /**
  * Construct a `Signer` (from `@innis/nostr-core`) backed by a NIP-07 browser extension.
  *
- * The returned signer is frozen and carries `kind: "extension"`. `getPublicKey` is memoised
- * after the first successful resolve — subsequent calls return the cached value without
- * re-querying the extension. The cache is populated from {@link CreateNip07SignerInput.getUserPubkey}
- * when non-null, otherwise from `ext.getPublicKey()` (the result is validated and branded as
+ * The returned signer carries `kind: "extension"`. `getPublicKey` is memoised after the first
+ * successful resolve — subsequent calls return the cached value without re-querying the
+ * extension. The cache is populated from {@link CreateNip07SignerInput.getUserPubkey} when
+ * non-null, otherwise from `ext.getPublicKey()` (the result is validated and branded as
  * `PublicKey`).
  *
  * Error translation:
@@ -108,7 +112,7 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
   const cryptoCall = (
     nip: "nip04" | "nip44",
     operation: "encrypt" | "decrypt",
-  ): (peerPubkey: string, payload: string) => Promise<Result<string, SignerError>> => {
+  ): (peerPubkey: PublicKey, payload: string) => Promise<Result<string, SignerError>> => {
     const failureTag: SignerErrorTag = operation === "encrypt" ? "encrypt-failed" : "decrypt-failed"
     return async (peerPubkey, payload) => {
       const ext = getExtension()
@@ -120,26 +124,17 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
       try {
         return ok(await sub[operation](peerPubkey, payload))
       } catch (err) {
-        if (isUserRejection(err)) throw new SignerRejectedError(errorMessage(err), err)
+        throwIfUserRejected(err)
         return failure(new SignerError(failureTag, errorMessage(err), err))
       }
     }
   }
 
-  const nip04Encrypt = cryptoCall("nip04", "encrypt")
-  const nip04Decrypt = cryptoCall("nip04", "decrypt")
-  const nip44Encrypt = cryptoCall("nip44", "encrypt")
-  const nip44Decrypt = cryptoCall("nip44", "decrypt")
-
   const signEvent = async (event: UnsignedEvent): Promise<NostrEvent> => {
-    const ext = requireExtension()
-    let raw: unknown
-    try {
-      raw = await ext.signEvent(event)
-    } catch (err) {
-      if (isUserRejection(err)) throw new SignerRejectedError(errorMessage(err), err)
+    const raw = await requireExtension().signEvent(event).catch((err: unknown): never => {
+      throwIfUserRejected(err)
       throw err
-    }
+    })
     const signed = parseNostrEvent(raw)
     if (signed === null) throw new SigningError("NIP-07 extension returned an invalid signed event")
     const expected = getUserPubkey()
@@ -150,13 +145,13 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
     return signed
   }
 
-  return Object.freeze({
+  return {
     kind: "extension",
     getPublicKey,
-    nip04Decrypt,
-    nip04Encrypt,
-    nip44Decrypt,
-    nip44Encrypt,
     signEvent,
-  })
+    nip04Encrypt: cryptoCall("nip04", "encrypt"),
+    nip04Decrypt: cryptoCall("nip04", "decrypt"),
+    nip44Encrypt: cryptoCall("nip44", "encrypt"),
+    nip44Decrypt: cryptoCall("nip44", "decrypt"),
+  }
 }
