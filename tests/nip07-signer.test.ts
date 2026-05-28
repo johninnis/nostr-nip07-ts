@@ -51,6 +51,21 @@ Deno.test("getPublicKey - throws SigningError when getUserPubkey returns null an
   await assertRejects(() => signer.getPublicKey(), SigningError, "No NIP-07 extension found")
 })
 
+Deno.test("getPublicKey - falls back to extension when getUserPubkey returns null", async () => {
+  const fromExt = "c".repeat(64)
+  const signer = createNip07Signer({
+    getExtension: provide({
+      getPublicKey: () => Promise.resolve(fromExt),
+      signEvent: () => Promise.reject(new Error("unused")),
+    }),
+    getUserPubkey: () => null,
+  })
+
+  const result = await signer.getPublicKey()
+
+  assertEquals(result, fromExt)
+})
+
 Deno.test("nip44Decrypt - returns no-signer error when no extension is available", async () => {
   const signer = createNip07Signer({ getExtension: noExtension, getUserPubkey: () => parsePublicKey("b".repeat(64)) })
 
@@ -117,6 +132,22 @@ Deno.test("nip04Encrypt - returns no-signer error when extension does not implem
   const result = await signer.nip04Encrypt(parsePublicKey("b".repeat(64)), "hi")
   assertEquals(result.success, false)
   if (!result.success) assertEquals(result.error.tag, "no-signer")
+})
+
+Deno.test("signEvent - throws SigningError when extension returns a malformed signed event", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide({
+      getPublicKey: () => Promise.resolve("a".repeat(64)),
+      signEvent: () => Promise.resolve({ not: "a real event" }),
+    }),
+    getUserPubkey: () => parsePublicKey("a".repeat(64)),
+  })
+
+  await assertRejects(
+    () => signer.signEvent({ kind: 1, content: "hi", tags: [], created_at: 1 }),
+    SigningError,
+    "invalid signed event",
+  )
 })
 
 Deno.test("signEvent - throws error when no extension is available", async () => {

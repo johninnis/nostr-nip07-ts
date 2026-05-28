@@ -33,7 +33,7 @@ const pubkey = await signer.getPublicKey()
 const signed = await signer.signEvent(unsignedEvent)
 
 const ciphertext = await signer.nip44Encrypt(peerPubkey, "hi")
-if (ciphertext.ok) {
+if (ciphertext.success) {
   console.log("encrypted:", ciphertext.value)
 }
 ```
@@ -87,7 +87,7 @@ Resolves once and caches. Priority order: in-memory cache → `getUserPubkey()` 
 
 ### `signEvent`
 
-Calls `ext.signEvent(event)`. When `getUserPubkey()` returns a non-null pubkey, the signed event's pubkey is compared against it; a divergence fires `onPubkeyMismatch?.(expected, actual)` and throws `PubkeyMismatchError`. The mismatch check is the line of defence against an extension silently switching accounts mid-session.
+Calls `ext.signEvent(event)` and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response throws `SigningError` rather than reaching the caller as a fake `NostrEvent`. When `getUserPubkey()` returns a non-null pubkey, the signed event's pubkey is then compared against it; a divergence fires `onPubkeyMismatch?.(expected, actual)` and throws `PubkeyMismatchError`. The mismatch check is the line of defence against an extension silently switching accounts mid-session.
 
 ### `nip44Encrypt` / `nip44Decrypt` / `nip04Encrypt` / `nip04Decrypt`
 
@@ -99,7 +99,7 @@ User rejection is the exception: it is thrown as `SignerRejectedError` rather th
 
 All error classes are re-exports from `@innis/nostr-core` — the same ones every other `@innis/*` signer throws.
 
-- **`SigningError`** — `getPublicKey` / `signEvent` invoked while `getExtension()` returns `null`.
+- **`SigningError`** — `getPublicKey` / `signEvent` invoked while `getExtension()` returns `null`, or `signEvent` received a malformed response from the extension.
 - **`SignerRejectedError`** — user clicked "deny" in the extension popup. Detected via `isUserRejection` from `@innis/nostr-core` (heuristic match on the extension's error message).
 - **`PubkeyMismatchError`** — `signEvent` produced an event whose pubkey didn't match `getUserPubkey()`.
 - **`SignerError("no-signer" | "encrypt-failed" | "decrypt-failed", …)`** — wrapped in `Result.failure` by `nip04*` / `nip44*` for non-rejection failures.
@@ -108,7 +108,7 @@ Other errors from the extension propagate untouched.
 
 ## Testing
 
-The signer is fully unit-testable without a browser. Pass a stub `NostrExtension` (or `null`) through `getExtension` and the rest of the dependency boundary is satisfied. The 17 tests under `tests/nip07-signer.test.ts` cover every branch — extension presence / absence, NIP-04 / NIP-44 presence / absence, pubkey-mismatch detection, user rejection, and the encrypt / decrypt result-vs-throw split.
+The signer is fully unit-testable without a browser. Pass a stub `NostrExtension` (or `null`) through `getExtension` and the rest of the dependency boundary is satisfied. The tests under `tests/nip07-signer.test.ts` cover every branch — extension presence / absence, NIP-04 / NIP-44 presence / absence, pubkey-mismatch detection, malformed extension responses, user rejection, and the encrypt / decrypt result-vs-throw split.
 
 For integration tests that need a real signing path without a browser, use `createLocalSigner` from `@innis/nostr-core` with a generated keypair.
 

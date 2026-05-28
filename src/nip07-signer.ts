@@ -1,8 +1,10 @@
-import type { NostrEvent, PublicKey, Result, Signer, UnsignedEvent } from "@innis/nostr-core"
+import type { NostrEvent, PublicKey, Result, Signer, SignerErrorTag, UnsignedEvent } from "@innis/nostr-core"
 import {
+  errorMessage,
   failure,
   isUserRejection,
   ok,
+  parseNostrEvent,
   parsePublicKey,
   PubkeyMismatchError,
   SignerError,
@@ -13,12 +15,16 @@ import {
 /**
  * The shape NIP-07 browser extensions expose at `window.nostr`. `getPublicKey` and `signEvent`
  * are mandatory; the encryption sub-objects are optional — older extensions ship only NIP-04,
- * newer ones may ship only NIP-44. Consumers writing tests against {@link createNip07Signer}
- * can satisfy this interface directly with a stub object.
+ * newer ones may ship only NIP-44.
+ *
+ * `signEvent` is typed `Promise<unknown>` because the extension is an untrusted boundary: the
+ * adapter validates the response with `parseNostrEvent` from `@innis/nostr-core` before
+ * returning it. Stubs that resolve a real `NostrEvent` satisfy this signature unchanged
+ * (`NostrEvent` is assignable to `unknown`).
  */
 export interface NostrExtension {
   readonly getPublicKey: () => Promise<string>
-  readonly signEvent: (event: UnsignedEvent) => Promise<NostrEvent>
+  readonly signEvent: (event: UnsignedEvent) => Promise<unknown>
   readonly nip04?: {
     readonly decrypt: (pubkey: string, ciphertext: string) => Promise<string>
     readonly encrypt: (pubkey: string, plaintext: string) => Promise<string>
@@ -49,6 +55,8 @@ export interface CreateNip07SignerInput {
   readonly onPubkeyMismatch?: (expected: PublicKey, actual: PublicKey) => void
 }
 
+const NIP_LABEL = { nip04: "NIP-04", nip44: "NIP-44" } as const
+
 /**
  * Construct a `Signer` (from `@innis/nostr-core`) backed by a NIP-07 browser extension.
  *
@@ -62,6 +70,9 @@ export interface CreateNip07SignerInput {
  *
  * - **No extension present** — `getPublicKey` and `signEvent` throw `SigningError`; NIP-04 /
  *   NIP-44 methods return `Result.failure(SignerError("no-signer", …))`.
+ * - **Extension returned a malformed signed event** — `signEvent` throws `SigningError`. The
+ *   extension is treated as untrusted; the response is validated with `parseNostrEvent` before
+ *   being returned to the caller.
  * - **User rejection** — detected via `isUserRejection` from `@innis/nostr-core` and thrown as
  *   `SignerRejectedError` from `signEvent`, `nip04*`, and `nip44*` alike. Rejection is a
  *   control-flow signal, not a recoverable cryptographic failure, so the `Result`-returning
@@ -69,7 +80,8 @@ export interface CreateNip07SignerInput {
  * - **Pubkey mismatch** (only when `getUserPubkey` returns non-null) — fires
  *   `onPubkeyMismatch?.(expected, actual)` then throws `PubkeyMismatchError` from `signEvent`.
  * - **Other extension errors** — `signEvent` re-throws untouched; NIP-04 / NIP-44 return
- *   `Result.failure(SignerError("decrypt-failed" | "encrypt-failed", …))`.
+ *   `Result.failure(SignerError("decrypt-failed" | "encrypt-failed", …))` with the original
+ *   error preserved as `cause`.
  */
 export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
   const { getExtension, getUserPubkey, onPubkeyMismatch } = input
@@ -77,7 +89,7 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
 
   const requireExtension = (): NostrExtension => {
     const ext = getExtension()
-    if (!ext) throw new SigningError("No NIP-07 extension found")
+    if (ext === null) throw new SigningError("No NIP-07 extension found")
     return ext
   }
 
@@ -93,64 +105,45 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
     return pubkeyCache
   }
 
-  const callExt = async <T>(
-    extract: (ext: NostrExtension) => Promise<T> | null,
-    missingDetail: string,
-    failureCode: "decrypt-failed" | "encrypt-failed",
-  ): Promise<Result<T, SignerError>> => {
-    const ext = getExtension()
-    if (!ext) return failure(new SignerError("no-signer", "No NIP-07 extension found"))
-    const promise = extract(ext)
-    if (!promise) return failure(new SignerError("no-signer", missingDetail))
-    try {
-      return ok(await promise)
-    } catch (err) {
-      if (isUserRejection(err)) {
-        throw new SignerRejectedError(err instanceof Error ? err.message : "user rejected")
+  const cryptoCall = (
+    nip: "nip04" | "nip44",
+    operation: "encrypt" | "decrypt",
+  ): (peerPubkey: string, payload: string) => Promise<Result<string, SignerError>> => {
+    const failureTag: SignerErrorTag = operation === "encrypt" ? "encrypt-failed" : "decrypt-failed"
+    return async (peerPubkey, payload) => {
+      const ext = getExtension()
+      if (ext === null) return failure(new SignerError("no-signer", "No NIP-07 extension found"))
+      const sub = ext[nip]
+      if (sub === undefined) {
+        return failure(new SignerError("no-signer", `NIP-07 extension does not implement ${NIP_LABEL[nip]}`))
       }
-      return failure(new SignerError(failureCode, err instanceof Error ? err.message : String(err)))
+      try {
+        return ok(await sub[operation](peerPubkey, payload))
+      } catch (err) {
+        if (isUserRejection(err)) throw new SignerRejectedError(errorMessage(err), err)
+        return failure(new SignerError(failureTag, errorMessage(err), err))
+      }
     }
   }
 
-  const nip44Decrypt = (pubkey: string, ciphertext: string): Promise<Result<string, SignerError>> =>
-    callExt(
-      (ext) => ext.nip44?.decrypt(pubkey, ciphertext) ?? null,
-      "NIP-07 extension does not implement NIP-44",
-      "decrypt-failed",
-    )
-
-  const nip44Encrypt = (pubkey: string, plaintext: string): Promise<Result<string, SignerError>> =>
-    callExt(
-      (ext) => ext.nip44?.encrypt(pubkey, plaintext) ?? null,
-      "NIP-07 extension does not implement NIP-44",
-      "encrypt-failed",
-    )
-
-  const nip04Decrypt = (pubkey: string, ciphertext: string): Promise<Result<string, SignerError>> =>
-    callExt(
-      (ext) => ext.nip04?.decrypt(pubkey, ciphertext) ?? null,
-      "NIP-07 extension does not implement NIP-04",
-      "decrypt-failed",
-    )
-
-  const nip04Encrypt = (pubkey: string, plaintext: string): Promise<Result<string, SignerError>> =>
-    callExt(
-      (ext) => ext.nip04?.encrypt(pubkey, plaintext) ?? null,
-      "NIP-07 extension does not implement NIP-04",
-      "encrypt-failed",
-    )
+  const nip04Encrypt = cryptoCall("nip04", "encrypt")
+  const nip04Decrypt = cryptoCall("nip04", "decrypt")
+  const nip44Encrypt = cryptoCall("nip44", "encrypt")
+  const nip44Decrypt = cryptoCall("nip44", "decrypt")
 
   const signEvent = async (event: UnsignedEvent): Promise<NostrEvent> => {
     const ext = requireExtension()
-    let signed: NostrEvent
+    let raw: unknown
     try {
-      signed = await ext.signEvent(event)
-    } catch (error) {
-      if (isUserRejection(error)) throw new SignerRejectedError(error instanceof Error ? error.message : undefined)
-      throw error
+      raw = await ext.signEvent(event)
+    } catch (err) {
+      if (isUserRejection(err)) throw new SignerRejectedError(errorMessage(err), err)
+      throw err
     }
+    const signed = parseNostrEvent(raw)
+    if (signed === null) throw new SigningError("NIP-07 extension returned an invalid signed event")
     const expected = getUserPubkey()
-    if (expected && signed.pubkey !== expected) {
+    if (expected !== null && signed.pubkey !== expected) {
       onPubkeyMismatch?.(expected, signed.pubkey)
       throw new PubkeyMismatchError(expected, signed.pubkey)
     }
