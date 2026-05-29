@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert"
 import { parsePublicKey, PubkeyMismatchError, SignerRejectedError, SigningError } from "@innis/nostr-core"
 import { buildEventFixture } from "@innis/nostr-core/testing"
-import { createNip07Signer, type NostrExtension } from "../src/nip07-signer.ts"
+import { createNip07Signer, type NostrExtension } from "../src/nip07-signer-adapter.ts"
 
 const ALICE = parsePublicKey("a".repeat(64))
 const BOB = parsePublicKey("b".repeat(64))

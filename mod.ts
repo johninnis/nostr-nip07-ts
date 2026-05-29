@@ -30,4 +30,4 @@
  * @module
  */
 
-export * from "./src/nip07-signer.ts"
+export * from "./src/nip07-signer-adapter.ts"
