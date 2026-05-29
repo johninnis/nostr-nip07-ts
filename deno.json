@@ -1,6 +1,6 @@
 {
   "name": "@innis/nostr-nip07",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "description": "TypeScript NIP-07 Signer adapter for Nostr browser extensions (Alby, nos2x, Flamingo, etc.) — implements the canonical Signer interface from @innis/nostr-core.",
   "exports": "./mod.ts",
