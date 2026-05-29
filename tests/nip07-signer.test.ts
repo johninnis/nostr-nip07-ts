@@ -1,8 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert"
 import { parsePublicKey, PubkeyMismatchError, SignerRejectedError, SigningError } from "@innis/nostr-core"
 import { buildEventFixture } from "@innis/nostr-core/testing"
-import type { NostrExtension } from "../src/nip07-signer.ts"
-import { createNip07Signer } from "../src/nip07-signer.ts"
+import { createNip07Signer, type NostrExtension } from "../src/nip07-signer.ts"
 
 const ALICE = parsePublicKey("a".repeat(64))
 const BOB = parsePublicKey("b".repeat(64))
@@ -204,8 +203,8 @@ Deno.test("nip44Encrypt - returns ok with extension's ciphertext", async () => {
   const signer = createNip07Signer({
     getExtension: provide(buildExtension({
       nip44: {
-        encrypt: (_pk, plaintext) => Promise.resolve(`enc:${plaintext}`),
-        decrypt: (_pk, ciphertext) => Promise.resolve(ciphertext.replace(/^enc:/, "")),
+        encrypt: (_pubkey, plaintext) => Promise.resolve(`enc:${plaintext}`),
+        decrypt: (_pubkey, ciphertext) => Promise.resolve(ciphertext.replace(/^enc:/, "")),
       },
     })),
     getUserPubkey: () => ALICE,
@@ -220,8 +219,8 @@ Deno.test("nip44Decrypt - returns ok with extension's plaintext", async () => {
   const signer = createNip07Signer({
     getExtension: provide(buildExtension({
       nip44: {
-        encrypt: (_pk, plaintext) => Promise.resolve(`enc:${plaintext}`),
-        decrypt: (_pk, ciphertext) => Promise.resolve(ciphertext.replace(/^enc:/, "")),
+        encrypt: (_pubkey, plaintext) => Promise.resolve(`enc:${plaintext}`),
+        decrypt: (_pubkey, ciphertext) => Promise.resolve(ciphertext.replace(/^enc:/, "")),
       },
     })),
     getUserPubkey: () => ALICE,
@@ -263,4 +262,54 @@ Deno.test("nip44Decrypt - returns decrypt-failed when extension throws non-rejec
   const result = await signer.nip44Decrypt(BOB, "junk")
   assertEquals(result.success, false)
   if (!result.success) assertEquals(result.error.tag, "decrypt-failed")
+})
+
+Deno.test("nip44Encrypt - returns no-signer error when extension does not implement nip44", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension()),
+    getUserPubkey: () => ALICE,
+  })
+
+  const result = await signer.nip44Encrypt(BOB, "hi")
+  assertEquals(result.success, false)
+  if (!result.success) assertEquals(result.error.tag, "no-signer")
+})
+
+Deno.test("nip04Decrypt - throws SignerRejectedError when extension rejects", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({
+      nip04: {
+        encrypt: () => Promise.reject(new Error("unused")),
+        decrypt: () => Promise.reject(new Error("User rejected the request")),
+      },
+    })),
+    getUserPubkey: () => ALICE,
+  })
+
+  await assertRejects(() => signer.nip04Decrypt(BOB, "ciphertext"), SignerRejectedError)
+})
+
+Deno.test("nip04Encrypt - returns encrypt-failed when extension throws non-rejection error", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({
+      nip04: {
+        encrypt: () => Promise.reject(new Error("plaintext too long")),
+        decrypt: () => Promise.reject(new Error("unused")),
+      },
+    })),
+    getUserPubkey: () => ALICE,
+  })
+
+  const result = await signer.nip04Encrypt(BOB, "x".repeat(10_000))
+  assertEquals(result.success, false)
+  if (!result.success) assertEquals(result.error.tag, "encrypt-failed")
+})
+
+Deno.test("getPublicKey - throws SigningError when extension returns malformed pubkey", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({ getPublicKey: () => Promise.resolve("not-a-hex-pubkey") })),
+    getUserPubkey: () => null,
+  })
+
+  await assertRejects(() => signer.getPublicKey(), SigningError, "invalid public key")
 })

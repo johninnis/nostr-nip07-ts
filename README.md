@@ -19,7 +19,16 @@ npx jsr add @innis/nostr-nip07
 ## Quick start
 
 ```ts
-import { createNip07Signer } from "@innis/nostr-nip07"
+import { createNip07Signer, type NostrExtension } from "@innis/nostr-nip07"
+
+// NIP-07 extensions install themselves at `window.nostr`. The library does not augment
+// the global `Window` type — declare it once in your own app so `globalThis.window.nostr`
+// type-checks:
+declare global {
+  interface Window {
+    nostr?: NostrExtension
+  }
+}
 
 const signer = createNip07Signer({
   getExtension: () => globalThis.window?.nostr ?? null,
@@ -65,7 +74,7 @@ interface CreateNip07SignerInput {
 ```ts
 interface NostrExtension {
   readonly getPublicKey: () => Promise<string>
-  readonly signEvent: (event: UnsignedEvent) => Promise<NostrEvent>
+  readonly signEvent: (event: UnsignedEvent) => Promise<unknown>
   readonly nip04?: {
     readonly decrypt: (pubkey: string, ciphertext: string) => Promise<string>
     readonly encrypt: (pubkey: string, plaintext: string) => Promise<string>
@@ -77,17 +86,23 @@ interface NostrExtension {
 }
 ```
 
-The shape NIP-07 extensions expose at `window.nostr`. `getPublicKey` and `signEvent` are mandatory; the encryption sub-objects are optional — older extensions ship only NIP-04, newer ones may ship only NIP-44. Consumers writing tests against `createNip07Signer` satisfy this interface directly with a stub object — see `tests/nip07-signer.test.ts` for examples.
+The shape NIP-07 extensions expose at `window.nostr`. `getPublicKey` and `signEvent` are mandatory; the encryption sub-objects are optional — older extensions ship only NIP-04, newer ones may ship only NIP-44.
+
+`signEvent` is typed `Promise<unknown>` because the extension is an untrusted boundary: the adapter validates the response with `parseNostrEvent` from `@innis/nostr-core` before returning it. Stubs that resolve a real `NostrEvent` satisfy this signature unchanged — `NostrEvent` is assignable to `unknown`. Consumers writing tests against `createNip07Signer` satisfy this interface directly with a stub object — see `tests/nip07-signer.test.ts` for examples.
 
 ## Behaviour
 
 ### `getPublicKey`
 
-Resolves once and caches. Priority order: in-memory cache → `getUserPubkey()` (if non-null) → `ext.getPublicKey()`. The extension result is validated and branded as `PublicKey`.
+Resolves once and freezes the result. Priority order on the resolving call: in-memory cache → `getUserPubkey()` (if non-null) → `ext.getPublicKey()`. The extension result is validated and branded as `PublicKey`; if validation fails, `SigningError` is thrown with the underlying `InvalidPublicKeyError` preserved as `cause`. Subsequent calls return the cached pubkey without re-querying anything.
+
+The freeze is deliberate, and is one half of the mid-session identity-drift trip-wire (see `signEvent` below). Do not assume `getPublicKey()` will pick up a later change to `getUserPubkey()` — the cached value is a snapshot of the identity at the time the signer first resolved.
 
 ### `signEvent`
 
-Calls `ext.signEvent(event)` and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response throws `SigningError` rather than reaching the caller as a fake `NostrEvent`. When `getUserPubkey()` returns a non-null pubkey, the signed event's pubkey is then compared against it; a divergence fires `onPubkeyMismatch?.(expected, actual)` and throws `PubkeyMismatchError`. The mismatch check is the line of defence against an extension silently switching accounts mid-session.
+Calls `ext.signEvent(event)` and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response throws `SigningError` rather than reaching the caller as a fake `NostrEvent`. `getUserPubkey()` is then called *fresh* (no cache) and, when non-null, compared against the signed event's pubkey; a divergence fires `onPubkeyMismatch?.(expected, actual)` and throws `PubkeyMismatchError`.
+
+This is the second half of the trip-wire. Because `getPublicKey()` is frozen but `signEvent` reads `getUserPubkey()` fresh, if the application's session pubkey changes after the signer is constructed (logout/login, extension silently switching accounts), the next `signEvent` catches the divergence before the wrong-account event leaves the boundary.
 
 ### `nip44Encrypt` / `nip44Decrypt` / `nip04Encrypt` / `nip04Decrypt`
 
