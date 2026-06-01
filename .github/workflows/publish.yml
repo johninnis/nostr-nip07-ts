@@ -1,8 +1,9 @@
 name: Publish
+
 on:
   push:
-    branches:
-      - master
+    tags:
+      - "v*"
 
 jobs:
   publish:
@@ -12,5 +13,19 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
-      - name: Publish package
-        run: npx jsr publish
+      - uses: denoland/setup-deno@v2
+
+      - name: Verify tag matches deno.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).version)')"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag v$tag does not match deno.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Verify
+        run: deno task ci
+
+      - name: Publish to JSR
+        run: deno publish

@@ -1,5 +1,7 @@
 # @innis/nostr-nip07
 
+[![CI](https://github.com/johninnis/nostr-nip07-ts/actions/workflows/ci.yml/badge.svg)](https://github.com/johninnis/nostr-nip07-ts/actions/workflows/ci.yml)
+
 A NIP-07 [`Signer`](https://jsr.io/@innis/nostr-core) adapter for browser-extension key managers — Alby, nos2x, Flamingo, and anything else that exposes the `window.nostr` API.
 
 The whole package is one factory function. It wraps the extension's wire surface (`getPublicKey`, `signEvent`, optional `nip04` / `nip44` sub-objects) into the canonical `Signer` interface from `@innis/nostr-core`, so application code can be written against `Signer` and stay oblivious to whether it's talking to a NIP-07 extension, a `createLocalSigner`, or a NIP-46 client signer. The returned signer carries `kind: "extension"` for code that does need to discriminate.
