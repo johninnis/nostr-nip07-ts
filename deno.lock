@@ -1,7 +1,7 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@innis/nostr-core@0.2": "0.2.0",
+    "jsr:@innis/nostr-core@~0.2.2": "0.2.2",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "jsr:@std/path@1": "1.1.4",
@@ -11,8 +11,8 @@
     "npm:@scure/base@2": "2.2.0"
   },
   "jsr": {
-    "@innis/nostr-core@0.2.0": {
-      "integrity": "55dba8aca3db2cbf9b92b080114720ae44accc0f48e51d711b32c233749a769a",
+    "@innis/nostr-core@0.2.2": {
+      "integrity": "3e2e26aebbf55c9730be1b479622f9405fa87759b384c18f0b7a90facd045bb2",
       "dependencies": [
         "npm:@noble/ciphers",
         "npm:@noble/curves",
@@ -55,7 +55,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@innis/nostr-core@0.2",
+      "jsr:@innis/nostr-core@~0.2.2",
       "jsr:@std/assert@1",
       "jsr:@std/path@1"
     ]

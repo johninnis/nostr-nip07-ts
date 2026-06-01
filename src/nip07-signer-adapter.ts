@@ -1,12 +1,12 @@
 import type { NostrEvent, PublicKey, Signer, SignerErrorTag, UnsignedEvent } from "@innis/nostr-core"
 import {
+  assertPubkeyMatches,
   errorMessage,
   failure,
   isUserRejection,
   ok,
   parseNostrEvent,
   parsePublicKey,
-  PubkeyMismatchError,
   SignerError,
   SignerRejectedError,
   SigningError,
@@ -153,11 +153,7 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
     }
     const signed = parseNostrEvent(raw)
     if (signed === null) throw new SigningError("NIP-07 extension returned an invalid signed event")
-    const expected = getUserPubkey()
-    if (expected !== null && signed.pubkey !== expected) {
-      onPubkeyMismatch?.(expected, signed.pubkey)
-      throw new PubkeyMismatchError(expected, signed.pubkey)
-    }
+    assertPubkeyMatches(getUserPubkey(), signed.pubkey, onPubkeyMismatch)
     return signed
   }
 
