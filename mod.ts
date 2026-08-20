@@ -16,10 +16,16 @@
  *
  * @example
  * ```ts
- * import { createNip07Signer } from "@innis/nostr-nip07"
+ * import { createNip07Signer, isNostrExtension } from "@innis/nostr-nip07"
+ * import type { NostrExtension } from "@innis/nostr-nip07"
+ *
+ * const injectedExtension = (): NostrExtension | null => {
+ *   const candidate: unknown = Reflect.get(globalThis, "nostr")
+ *   return isNostrExtension(candidate) ? candidate : null
+ * }
  *
  * const signer = createNip07Signer({
- *   getExtension: () => globalThis.window?.nostr ?? null,
+ *   getExtension: injectedExtension,
  *   getUserPubkey: () => loggedInPubkey,
  *   onPubkeyMismatch: (expected, actual) => reportSecurityEvent({ expected, actual }),
  * })

@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "@std/assert"
 import { parsePublicKey, PubkeyMismatchError, SignerRejectedError, SigningError } from "@innis/nostr-core"
 import { buildEventFixture } from "@innis/nostr-core/testing"
-import { createNip07Signer, type NostrExtension } from "../src/nip07-signer-adapter.ts"
+import { createNip07Signer, isNostrExtension, type NostrExtension } from "../src/nip07-signer-adapter.ts"
 
 const ALICE = parsePublicKey("a".repeat(64))
 const BOB = parsePublicKey("b".repeat(64))
@@ -312,4 +312,21 @@ Deno.test("getPublicKey - throws SigningError when extension returns malformed p
   })
 
   await assertRejects(() => signer.getPublicKey(), SigningError, "invalid public key")
+})
+
+Deno.test("isNostrExtension - accepts the mandatory NIP-07 surface", () => {
+  assertEquals(isNostrExtension(buildExtension()), true)
+})
+
+Deno.test("isNostrExtension - rejects a value missing signEvent", () => {
+  assertEquals(isNostrExtension({ getPublicKey: () => Promise.resolve("") }), false)
+})
+
+Deno.test("isNostrExtension - rejects members that are not functions", () => {
+  assertEquals(isNostrExtension({ getPublicKey: "not a function", signEvent: () => Promise.resolve({}) }), false)
+})
+
+Deno.test("isNostrExtension - rejects non-objects", () => {
+  assertEquals(isNostrExtension(null), false)
+  assertEquals(isNostrExtension("nostr"), false)
 })

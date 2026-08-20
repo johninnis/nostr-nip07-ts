@@ -36,6 +36,20 @@ export interface NostrExtension {
 }
 
 /**
+ * Whether an unknown value is shaped like a {@linkcode NostrExtension}.
+ *
+ * `window.nostr` is planted by software the application did not ship — an extension's
+ * content script, or anything else running on the page — so what is found there should be
+ * read through this guard rather than trusted: something that is not a signer reads as no
+ * extension instead of failing later inside one. Only the mandatory surface is checked;
+ * the optional encryption sub-objects are validated per call by the adapter.
+ */
+export const isNostrExtension = (value: unknown): value is NostrExtension =>
+  typeof value === "object" && value !== null &&
+  "getPublicKey" in value && typeof value.getPublicKey === "function" &&
+  "signEvent" in value && typeof value.signEvent === "function"
+
+/**
  * Inputs to {@link createNip07Signer}.
  *
  * - **`getExtension`** is invoked on every signer operation, not just at construction. This lets
