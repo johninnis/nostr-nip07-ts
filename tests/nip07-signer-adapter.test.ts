@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert"
+import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert"
 import { parsePublicKey, PubkeyMismatchError, SignerRejectedError, SigningError } from "@innis/nostr-core"
 import { buildEventFixture } from "@innis/nostr-core/testing"
 import { createNip07Signer, isNostrExtension, type NostrExtension } from "../src/nip07-signer-adapter.ts"
@@ -329,4 +329,97 @@ Deno.test("isNostrExtension - rejects members that are not functions", () => {
 Deno.test("isNostrExtension - rejects non-objects", () => {
   assertEquals(isNostrExtension(null), false)
   assertEquals(isNostrExtension("nostr"), false)
+})
+
+Deno.test("signEvent - converts a non-rejection extension error to SigningError carrying it as cause", async () => {
+  const original = new Error("wallet locked")
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({ signEvent: () => Promise.reject(original) })),
+    getUserPubkey: () => ALICE,
+  })
+
+  const error = await assertRejects(
+    () => signer.signEvent({ kind: 1, content: "hi", tags: [], created_at: 1 }),
+    SigningError,
+    "wallet locked",
+  )
+  assertEquals(error.cause, original)
+})
+
+Deno.test("signEvent - converts a synchronous extension throw to SigningError", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({
+      signEvent: () => {
+        throw new Error("extension crashed")
+      },
+    })),
+    getUserPubkey: () => ALICE,
+  })
+
+  await assertRejects(
+    () => signer.signEvent({ kind: 1, content: "hi", tags: [], created_at: 1 }),
+    SigningError,
+    "extension crashed",
+  )
+})
+
+Deno.test("getPublicKey - converts a non-rejection extension error to SigningError carrying it as cause", async () => {
+  const original = new Error("wallet locked")
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({ getPublicKey: () => Promise.reject(original) })),
+    getUserPubkey: () => null,
+  })
+
+  const error = await assertRejects(() => signer.getPublicKey(), SigningError, "wallet locked")
+  assertEquals(error.cause, original)
+})
+
+Deno.test("getPublicKey - converts user-rejection errors to SignerRejectedError", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(
+      buildExtension({ getPublicKey: () => Promise.reject(new Error("User rejected the request")) }),
+    ),
+    getUserPubkey: () => null,
+  })
+
+  await assertRejects(() => signer.getPublicKey(), SignerRejectedError)
+})
+
+Deno.test("nip44Decrypt - returns the extension's message and error as cause on a non-rejection throw", async () => {
+  const original = new Error("ciphertext malformed")
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({
+      nip44: {
+        encrypt: () => Promise.resolve("ok"),
+        decrypt: () => Promise.reject(original),
+      },
+    })),
+    getUserPubkey: () => ALICE,
+  })
+
+  const result = await signer.nip44Decrypt(BOB, "junk")
+  assertEquals(result.success, false)
+  if (result.success) return
+  assertEquals(result.error.message, "ciphertext malformed")
+  assertEquals(result.error.cause, original)
+})
+
+Deno.test("nip44Encrypt - returns encrypt-failed rather than throwing when the extension throws synchronously", async () => {
+  const signer = createNip07Signer({
+    getExtension: provide(buildExtension({
+      nip44: {
+        encrypt: () => {
+          throw new TypeError("not ready")
+        },
+        decrypt: () => Promise.resolve("unused"),
+      },
+    })),
+    getUserPubkey: () => ALICE,
+  })
+
+  const result = await signer.nip44Encrypt(BOB, "hello")
+  assertEquals(result.success, false)
+  if (result.success) return
+  assertEquals(result.error.tag, "encrypt-failed")
+  assertInstanceOf(result.error.cause, TypeError)
 })

@@ -102,7 +102,7 @@ The freeze is deliberate, and is one half of the mid-session identity-drift trip
 
 ### `signEvent`
 
-Calls `ext.signEvent(event)` and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response throws `SigningError` rather than reaching the caller as a fake `NostrEvent`. `getUserPubkey()` is then called *fresh* (no cache) and, when non-null, compared against the signed event's pubkey; a divergence fires `onPubkeyMismatch?.(expected, actual)` and throws `PubkeyMismatchError`.
+Calls `ext.signEvent(event)` — a throw from the extension becomes `SignerRejectedError` or `SigningError` (see [Errors](#errors)) — and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response throws `SigningError` rather than reaching the caller as a fake `NostrEvent`. `getUserPubkey()` is then called *fresh* (no cache) and, when non-null, compared against the signed event's pubkey; a divergence fires `onPubkeyMismatch?.(expected, actual)` and throws `PubkeyMismatchError`.
 
 This is the second half of the trip-wire. Because `getPublicKey()` is frozen but `signEvent` reads `getUserPubkey()` fresh, if the application's session pubkey changes after the signer is constructed (logout/login, extension silently switching accounts), the next `signEvent` catches the divergence before the wrong-account event leaves the boundary.
 
@@ -116,12 +116,12 @@ User rejection is the exception: it is thrown as `SignerRejectedError` rather th
 
 All error classes are defined in `@innis/nostr-core` — the same ones every other `@innis/*` signer throws. Import them from `@innis/nostr-core` to `instanceof`-check or pattern-match on `.tag`.
 
-- **`SigningError`** — `getPublicKey` / `signEvent` invoked while `getExtension()` returns `null`, or `signEvent` received a malformed response from the extension.
-- **`SignerRejectedError`** — user clicked "deny" in the extension popup. Detected via `isUserRejection` from `@innis/nostr-core` (heuristic match on the extension's error message).
-- **`PubkeyMismatchError`** — `signEvent` produced an event whose pubkey didn't match `getUserPubkey()`.
-- **`SignerError("no-signer" | "encrypt-failed" | "decrypt-failed", …)`** — wrapped in `Result.failure` by `nip04*` / `nip44*` for non-rejection failures.
+The extension is untrusted input, so nothing it throws crosses the adapter unconverted — every failure surfaces as one of the classes below.
 
-Other errors from the extension propagate untouched.
+- **`SigningError`** — `getPublicKey` / `signEvent` invoked while `getExtension()` returns `null`, received a malformed response from the extension, or the extension threw something that is not a user rejection. In the last case the error carries the extension's message and the original error as `cause`.
+- **`SignerRejectedError`** — user clicked "deny" in the extension popup, thrown from every method with the original error as `cause`. Detected via `isUserRejection` from `@innis/nostr-core` (heuristic match on the extension's error message).
+- **`PubkeyMismatchError`** — `signEvent` produced an event whose pubkey didn't match `getUserPubkey()`.
+- **`SignerError("no-signer" | "encrypt-failed" | "decrypt-failed", …)`** — wrapped in `Result.failure` by `nip04*` / `nip44*` for every non-rejection failure; an extension throw there is returned (extension's message, original as `cause`), never thrown.
 
 ## Testing
 

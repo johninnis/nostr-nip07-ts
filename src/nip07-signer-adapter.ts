@@ -1,4 +1,4 @@
-import type { NostrEvent, PublicKey, Signer, SignerErrorTag, UnsignedEvent } from "@innis/nostr-core"
+import type { NostrEvent, PublicKey, Result, Signer, SignerErrorTag, UnsignedEvent } from "@innis/nostr-core"
 import {
   assertPubkeyMatches,
   errorMessage,
@@ -71,8 +71,17 @@ export interface CreateNip07SignerInput {
 
 const NIP_LABEL = { nip04: "NIP-04", nip44: "NIP-44" } as const
 
-const throwIfUserRejected = (err: unknown): void => {
-  if (isUserRejection(err)) throw new SignerRejectedError(errorMessage(err), err)
+type ExtensionFault = SignerRejectedError | SigningError
+
+const extensionFault = (err: unknown): ExtensionFault =>
+  isUserRejection(err) ? new SignerRejectedError(errorMessage(err), err) : new SigningError(errorMessage(err), err)
+
+const callExtension = async <T>(call: () => Promise<T>): Promise<Result<T, ExtensionFault>> => {
+  try {
+    return ok(await call())
+  } catch (err) {
+    return failure(extensionFault(err))
+  }
 }
 
 /**
@@ -91,23 +100,27 @@ const throwIfUserRejected = (err: unknown): void => {
  * before the wrong-account event leaves the boundary. The frozen-snapshot vs fresh-read
  * asymmetry is the design; don't "fix" the cache to track `getUserPubkey()`.
  *
- * Error translation:
+ * Error translation — the extension is untrusted input, so nothing it throws or returns
+ * crosses this boundary unconverted. Every failure surfaces as one of `SigningError`,
+ * `SignerRejectedError`, `PubkeyMismatchError`, or a returned `Result.failure(SignerError)`:
  *
  * - **No extension present** — `getPublicKey` and `signEvent` throw `SigningError`; NIP-04 /
  *   NIP-44 methods return `Result.failure(SignerError("no-signer", …))`.
  * - **Extension returned a malformed signed event or pubkey** — `getPublicKey` / `signEvent`
- *   throw `SigningError`. The extension is treated as untrusted; `signEvent`'s response is
- *   validated with `parseNostrEvent`, `getPublicKey`'s is validated with `parsePublicKey`. The
- *   underlying `InvalidPublicKeyError` is preserved as `cause` so consumers can still inspect it.
- * - **User rejection** — detected via `isUserRejection` from `@innis/nostr-core` and thrown as
- *   `SignerRejectedError` from `signEvent`, `nip04*`, and `nip44*` alike. Rejection is a
- *   control-flow signal, not a recoverable cryptographic failure, so the `Result`-returning
- *   methods still throw rather than returning a failure tag.
+ *   throw `SigningError`. `signEvent`'s response is validated with `parseNostrEvent`,
+ *   `getPublicKey`'s with `parsePublicKey`; the underlying `InvalidPublicKeyError` is preserved
+ *   as `cause` so consumers can still inspect it.
+ * - **User rejection** — any extension throw recognised by `isUserRejection` from
+ *   `@innis/nostr-core` is thrown as `SignerRejectedError` (original error as `cause`) from
+ *   `getPublicKey`, `signEvent`, `nip04*`, and `nip44*` alike. Rejection is a control-flow
+ *   signal, not a recoverable cryptographic failure, so the `Result`-returning methods throw it
+ *   rather than returning a failure tag.
+ * - **Any other extension throw** — `getPublicKey` / `signEvent` throw `SigningError` carrying
+ *   the extension's message and the original error as `cause`; NIP-04 / NIP-44 return
+ *   `Result.failure(SignerError("decrypt-failed" | "encrypt-failed", …))` with the same message
+ *   and `cause`, and never throw.
  * - **Pubkey mismatch** (only when `getUserPubkey` returns non-null) — fires
  *   `onPubkeyMismatch?.(expected, actual)` then throws `PubkeyMismatchError` from `signEvent`.
- * - **Other extension errors** — `signEvent` re-throws untouched; NIP-04 / NIP-44 return
- *   `Result.failure(SignerError("decrypt-failed" | "encrypt-failed", …))` with the original
- *   error preserved as `cause`.
  */
 export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
   const { getExtension, getUserPubkey, onPubkeyMismatch } = input
@@ -126,9 +139,11 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
       pubkeyCache = fromCaller
       return pubkeyCache
     }
-    const fromExt = await requireExtension().getPublicKey()
+    const ext = requireExtension()
+    const fromExt = await callExtension(() => ext.getPublicKey())
+    if (!fromExt.success) throw fromExt.error
     try {
-      pubkeyCache = parsePublicKey(fromExt)
+      pubkeyCache = parsePublicKey(fromExt.value)
     } catch (err) {
       throw new SigningError("NIP-07 extension returned an invalid public key", err)
     }
@@ -147,25 +162,18 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
       if (sub === undefined) {
         return failure(new SignerError("no-signer", `NIP-07 extension does not implement ${NIP_LABEL[nip]}`))
       }
-      try {
-        return ok(await sub[operation](peerPubkey, payload))
-      } catch (err) {
-        throwIfUserRejected(err)
-        return failure(new SignerError(failureTag, errorMessage(err), err))
-      }
+      const outcome = await callExtension(() => sub[operation](peerPubkey, payload))
+      if (outcome.success) return outcome
+      if (outcome.error instanceof SignerRejectedError) throw outcome.error
+      return failure(new SignerError(failureTag, outcome.error.message, outcome.error.cause))
     }
   }
 
   const signEvent = async (event: UnsignedEvent): Promise<NostrEvent> => {
     const ext = requireExtension()
-    let raw: unknown
-    try {
-      raw = await ext.signEvent(event)
-    } catch (err) {
-      throwIfUserRejected(err)
-      throw err
-    }
-    const signed = parseNostrEvent(raw)
+    const raw = await callExtension(() => ext.signEvent(event))
+    if (!raw.success) throw raw.error
+    const signed = parseNostrEvent(raw.value)
     if (signed === null) throw new SigningError("NIP-07 extension returned an invalid signed event")
     assertPubkeyMatches(getUserPubkey(), signed.pubkey, onPubkeyMismatch)
     return signed

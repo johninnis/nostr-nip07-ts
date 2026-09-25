@@ -7,7 +7,9 @@
  * / NIP-44 encrypt / decrypt return `Result<string, SignerError>`. The extension is treated as
  * an untrusted boundary — `signEvent` validates the response with `parseNostrEvent` from
  * `@innis/nostr-core` and throws `SigningError` on malformed output. Extension-side user
- * rejections are translated into `SignerRejectedError`; a pubkey mismatch between the user's
+ * rejections are translated into `SignerRejectedError`, and any other extension throw into
+ * `SigningError` (or a returned `SignerError` failure from the crypto methods) with the original
+ * as `cause`; a pubkey mismatch between the user's
  * known identity and what the extension signs as throws `PubkeyMismatchError`.
  *
  * The returned signer carries `kind: "extension"` so consumers can discriminate it from
