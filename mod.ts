@@ -3,14 +3,13 @@
  *
  * `@innis/nostr-nip07` wraps the `window.nostr` API exposed by NIP-07 extensions into a `Signer`
  * (from `@innis/nostr-core`) so application code never has to branch on signer kind. Behaviour
- * mirrors the canonical `Signer` contract: `getPublicKey` / `signEvent` throw on failure; NIP-04
- * / NIP-44 encrypt / decrypt return `Result<string, SignerError>`. The extension is treated as
- * an untrusted boundary — `signEvent` validates the response with `parseNostrEvent` from
- * `@innis/nostr-core` and throws `SigningError` on malformed output. Extension-side user
- * rejections are translated into `SignerRejectedError`, and any other extension throw into
- * `SigningError` (or a returned `SignerError` failure from the crypto methods) with the original
- * as `cause`; a pubkey mismatch between the user's
- * known identity and what the extension signs as throws `PubkeyMismatchError`.
+ * mirrors the canonical `Signer` contract: every method returns a `Result` whose failure is a
+ * `SignerFailure`, and none throws. The extension is treated as an untrusted boundary —
+ * `signEvent` validates the response with `parseNostrEvent` and verifies its signature with
+ * `verifyEventSignature` from `@innis/nostr-core`, returning `sign-failed` on malformed or forged
+ * output. An extension-side user rejection is returned as `rejected`, any other extension throw
+ * as the method's failure mode carrying the extension's message, and a pubkey mismatch between
+ * the user's known identity and what the extension signs as is returned as `pubkey-mismatch`.
  *
  * The returned signer carries `kind: "extension"` so consumers can discriminate it from
  * `createLocalSigner` (`kind: "local"`) or a NIP-46 client signer (`kind: "bunker"`) without
@@ -33,6 +32,7 @@
  * })
  *
  * const signed = await signer.signEvent(unsignedEvent)
+ * if (!signed.success && signed.error.type === "rejected") console.log("declined")
  * ```
  *
  * @module
