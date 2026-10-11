@@ -5,11 +5,12 @@
  * (from `@innis/nostr-core`) so application code never has to branch on signer kind. Behaviour
  * mirrors the canonical `Signer` contract: every method returns a `Result` whose failure is a
  * `SignerFailure`, and none throws. The extension is treated as an untrusted boundary —
- * `signEvent` validates the response with `parseNostrEvent` and verifies its signature with
- * `verifyEventSignature` from `@innis/nostr-core`, returning `sign-failed` on malformed or forged
- * output. An extension-side user rejection is returned as `rejected`, any other extension throw
- * as the method's failure mode carrying the extension's message, and a pubkey mismatch between
- * the user's known identity and what the extension signs as is returned as `pubkey-mismatch`.
+ * `signEvent` validates the response with `parseNostrEvent`, compares it with the template it
+ * sent and verifies its signature with `verifyEventSignature` from `@innis/nostr-core`, returning
+ * `sign-failed` on malformed, altered or forged output. An extension-side user rejection is
+ * returned as `rejected`, any other extension throw as the method's failure mode carrying the
+ * extension's message, and a pubkey mismatch between the user's known identity and what the
+ * extension signs as is returned as `pubkey-mismatch`.
  *
  * The returned signer carries `kind: "extension"` so consumers can discriminate it from
  * `createLocalSigner` (`kind: "local"`) or a NIP-46 client signer (`kind: "bunker"`) without

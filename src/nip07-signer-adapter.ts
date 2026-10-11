@@ -2,6 +2,7 @@ import type { NostrEvent, PublicKey, Result, Signer, SignerFailure, UnsignedEven
 import {
   buildUnsignedEvent,
   checkPubkeyMatches,
+  checkSignedMatchesTemplate,
   failure,
   isUserRejection,
   ok,
@@ -16,9 +17,9 @@ import {
  * newer ones may ship only NIP-44.
  *
  * `signEvent` is typed `Promise<unknown>` because the extension is an untrusted boundary: the
- * adapter validates the response with `parseNostrEvent` from `@innis/nostr-core` before
- * returning it. Stubs that resolve a real `NostrEvent` satisfy this signature unchanged
- * (`NostrEvent` is assignable to `unknown`).
+ * adapter validates the response with `parseNostrEvent` from `@innis/nostr-core`, and checks it is
+ * the event it asked for, before returning it. Stubs that resolve a real `NostrEvent` satisfy this
+ * signature unchanged (`NostrEvent` is assignable to `unknown`).
  */
 export interface NostrExtension {
   readonly getPublicKey: () => Promise<string>
@@ -115,7 +116,10 @@ const callExtension = async <T>(
  *   `decrypt-failed` by method, carrying the extension's message.
  * - **Extension returned a malformed pubkey or signed event** — `public-key-failed` /
  *   `sign-failed`. `getPublicKey`'s response is validated with `parsePublicKey`, `signEvent`'s
- *   with `parseNostrEvent` and then, after the pubkey check, `verifyEventSignature` (ADR-0001).
+ *   with `parseNostrEvent` and then, after the pubkey check, compared with the template it was
+ *   sent by `checkSignedMatchesTemplate` — `kind`, `content`, `created_at`, and `tags` in order,
+ *   element by element — and checked with `verifyEventSignature`; an event that differs from the
+ *   template or does not verify is `sign-failed` (ADR-0001).
  * - **Pubkey mismatch** (against `getUserPubkey()`, else the first identity the signer saw) —
  *   `signEvent` fires `onPubkeyMismatch?.(expected, actual)` and returns `pubkey-mismatch`.
  */
@@ -177,6 +181,9 @@ export const createNip07Signer = (input: CreateNip07SignerInput): Signer => {
       onPubkeyMismatch?.(expected, signed.pubkey)
       return failure(mismatch)
     }
+    // Deliberate: an event that is not the template sent is refused, however well signed — see ADR-0001
+    const altered = checkSignedMatchesTemplate(template, signed)
+    if (altered !== null) return failure(altered)
     if (!verifyEventSignature(signed)) {
       return failure({ type: "sign-failed", message: "NIP-07 extension returned an event with an invalid signature" })
     }

@@ -13,8 +13,8 @@ Extensions such as Alby and nos2x-fox let the user switch accounts mid-session, 
 ## Decision
 
 - `getPublicKey` resolves once and keeps the result for the signer's lifetime: the host's `getUserPubkey()` when it returns a key, otherwise the extension's `getPublicKey()`, parsed with `parsePublicKey`.
-- The first identity the signer sees is pinned: the key `getPublicKey` resolved, or, if `signEvent` runs first, the key of the first event it signs.
-- `signEvent` compares every signed event's `pubkey` with `getUserPubkey()`, read afresh on each call, and when that returns `null`, with the pinned key. A difference returns `pubkey-mismatch` and fires `onPubkeyMismatch` (ADR-0001 then verifies the signature).
+- The first identity the signer sees is pinned: the key `getPublicKey` resolved, or, if `signEvent` runs first, the key of the first event it returns.
+- `signEvent` compares every signed event's `pubkey` with `getUserPubkey()`, read afresh on each call, and when that returns `null`, with the pinned key. A difference returns `pubkey-mismatch` and fires `onPubkeyMismatch` (ADR-0001 then checks the rest of the event).
 
 ## Consequences
 

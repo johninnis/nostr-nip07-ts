@@ -67,7 +67,7 @@ interface CreateNip07SignerInput {
 ```
 
 - **`getExtension`** is invoked on every signer operation, not just at construction. This lets the page wait for `window.nostr` to be injected (extensions inject asynchronously after page load) and lets it react to the extension going away mid-session.
-- **`getUserPubkey`** gates pubkey-mismatch detection. When it returns a non-null `PublicKey`, every signed event's pubkey is compared against it and a divergence returns a `pubkey-mismatch` `SignerFailure`. When it returns `null`, the event is compared with the first identity the signer saw instead (the key `getPublicKey` resolved, or the key of the first event signed), so an account switch inside the extension is still caught. NIP-04/NIP-44 encryption cannot be guarded this way, because NIP-07 does not say which key the extension used: a host that cares supplies `getUserPubkey` and builds a new signer on a change of user.
+- **`getUserPubkey`** gates pubkey-mismatch detection. When it returns a non-null `PublicKey`, every signed event's pubkey is compared against it and a divergence returns a `pubkey-mismatch` `SignerFailure`. When it returns `null`, the event is compared with the first identity the signer saw instead (the key `getPublicKey` resolved, or the key of the first event `signEvent` returned), so an account switch inside the extension is still caught. NIP-04/NIP-44 encryption cannot be guarded this way, because NIP-07 does not say which key the extension used: a host that cares supplies `getUserPubkey` and builds a new signer on a change of user.
 - **`onPubkeyMismatch`** fires when that failure is returned so callers can log, report telemetry, or trigger a logout flow in one place rather than at every `signEvent` call.
 - **`verifyEventSignature`** checks the id and Schnorr signature of every event the extension signs. Defaults to `verifyEventSignature` from `@innis/nostr-core`.
 
@@ -90,7 +90,7 @@ interface NostrExtension {
 
 The shape NIP-07 extensions expose at `window.nostr`. `getPublicKey` and `signEvent` are mandatory; the encryption sub-objects are optional — older extensions ship only NIP-04, newer ones may ship only NIP-44.
 
-`signEvent` is typed `Promise<unknown>` because the extension is an untrusted boundary: the adapter validates the response with `parseNostrEvent` from `@innis/nostr-core` before returning it. Stubs that resolve a real `NostrEvent` satisfy this signature unchanged — `NostrEvent` is assignable to `unknown`. Consumers writing tests against `createNip07Signer` satisfy this interface directly with a stub object — see `tests/nip07-signer-adapter.test.ts` for examples.
+`signEvent` is typed `Promise<unknown>` because the extension is an untrusted boundary: the adapter validates the response with `parseNostrEvent` from `@innis/nostr-core`, and checks it is the event it asked for, before returning it. Stubs that resolve a real `NostrEvent` satisfy this signature unchanged — `NostrEvent` is assignable to `unknown` — as long as they return the template's `kind`, `content`, `tags` and `created_at` unchanged. Consumers writing tests against `createNip07Signer` satisfy this interface directly with a stub object — see `tests/nip07-signer-adapter.test.ts` for examples.
 
 ### `isNostrExtension(value: unknown): value is NostrExtension`
 
@@ -106,7 +106,7 @@ Do not assume `getPublicKey()` will pick up a later change to `getUserPubkey()` 
 
 ### `signEvent`
 
-Calls `ext.signEvent(event)` — a throw from the extension becomes a `rejected` or `sign-failed` failure (see [Failures](#failures)) — and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response returns `sign-failed` rather than reaching the caller as a fake `NostrEvent`. `getUserPubkey()` is then called *fresh* (no cache) and, when non-null, compared against the signed event's pubkey; a divergence fires `onPubkeyMismatch?.(expected, actual)` and returns `pubkey-mismatch`. Finally the event's id and signature are verified, and one that does not verify returns `sign-failed`.
+Builds the template to sign with `buildUnsignedEvent` from `@innis/nostr-core` (an addressable kind with no `d` tag gains `["d", ""]`) and calls `ext.signEvent(template)` — a throw from the extension becomes a `rejected` or `sign-failed` failure (see [Failures](#failures)) — and validates the response with `parseNostrEvent` from `@innis/nostr-core` — the extension is an untrusted boundary, so a malformed response returns `sign-failed` rather than reaching the caller as a fake `NostrEvent`. `getUserPubkey()` is then called *fresh* (no cache) and, when non-null, compared against the signed event's pubkey; a divergence fires `onPubkeyMismatch?.(expected, actual)` and returns `pubkey-mismatch`. Next the event is compared with that template by `checkSignedMatchesTemplate` from `@innis/nostr-core`: NIP-07 lets the extension add only `id`, `pubkey` and `sig`, so an event whose `kind`, `content`, `created_at` or `tags` differ from the template's — tags compared in order, element by element — returns `sign-failed`. Finally the event's id and signature are verified, and one that does not verify returns `sign-failed` (see `docs/adr/0001`).
 
 Because `signEvent` reads `getUserPubkey()` fresh, if the application's session pubkey changes after the signer is constructed (logout/login, extension silently switching accounts), the next `signEvent` catches the divergence before the wrong-account event leaves the boundary.
 
@@ -120,12 +120,12 @@ Every method returns `Promise<Result<…, SignerFailure>>` and none throws. `Sig
 
 - **`no-signer`** — `getExtension()` returned `null`, or the extension does not implement the NIP a cipher method needs.
 - **`rejected`** — the user clicked "deny": an extension throw whose message `isUserRejection` from `@innis/nostr-core` recognises, from every method.
-- **`public-key-failed`** / **`sign-failed`** / **`encrypt-failed`** / **`decrypt-failed`** — the extension threw something that is not a rejection (the failure carries its message), or `getPublicKey` / `signEvent` answered with a malformed pubkey or event, or an event whose id or signature does not verify.
-- **`pubkey-mismatch`** — `signEvent` produced an event whose pubkey didn't match `getUserPubkey()`.
+- **`public-key-failed`** / **`sign-failed`** / **`encrypt-failed`** / **`decrypt-failed`** — the extension threw something that is not a rejection (the failure carries its message), or `getPublicKey` / `signEvent` answered with a malformed pubkey or event, an event that differs from the template it was sent, or an event whose id or signature does not verify.
+- **`pubkey-mismatch`** — `signEvent` produced an event whose pubkey didn't match `getUserPubkey()`, or, when that returns `null`, the identity the signer pinned: the key `getPublicKey` resolved, or the key of the first event `signEvent` returned (see `docs/adr/0002`).
 
 ## Testing
 
-The signer is fully unit-testable without a browser. Pass a stub `NostrExtension` (or `null`) through `getExtension` and the rest of the dependency boundary is satisfied. The tests under `tests/nip07-signer-adapter.test.ts` cover every branch — extension presence / absence, NIP-04 / NIP-44 presence / absence, pubkey-mismatch detection, malformed extension responses, signature verification, user rejection, and the failure each method returns.
+The signer is fully unit-testable without a browser. Pass a stub `NostrExtension` (or `null`) through `getExtension` and the rest of the dependency boundary is satisfied. The tests under `tests/` cover every branch — extension presence / absence, NIP-04 / NIP-44 presence / absence, pubkey-mismatch detection, malformed extension responses, events that differ from the template sent, signature verification, user rejection, and the failure each method returns.
 
 For integration tests that need a real signing path without a browser, use `createLocalSigner` from `@innis/nostr-core` with a generated keypair.
 
